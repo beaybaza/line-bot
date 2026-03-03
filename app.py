@@ -134,8 +134,11 @@ def ask_gemini(user_message):
     return response.text
 
 # ===== Webhook หลัก =====
-@app.route("/webhook", methods=["POST"])
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
+    # Line ส่ง GET มา Verify
+    if request.method == "GET":
+        return "OK", 200
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data()
 
