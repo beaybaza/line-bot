@@ -202,7 +202,7 @@ def verify_signature(body, signature):
 def ask_gemini(user_message, user_id):
     prompt = SYSTEM_PROMPT_NORMAL if has_greeted(user_id) else SYSTEM_PROMPT_FIRST
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
+        model_name="gemini-3.1-flash-lite-preview",
         system_instruction=prompt
     )
     response = model.generate_content(user_message)
