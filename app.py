@@ -425,6 +425,7 @@ def webhook():
             continue
 
         user_id = event["source"]["userId"]
+        print(f"[DEBUG_USER_ID] userId={user_id}", flush=True)
 
         # เช็คว่าบอทเปิดอยู่ไหม
         if not is_bot_active(user_id):
