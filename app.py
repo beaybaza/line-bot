@@ -34,37 +34,52 @@ message_queues = {}
 queue_timers = {}
 queue_lock = threading.Lock()
 
+
+# ===== เช็ค Deadline ไฟล์ป้ายพร้อมปริ้น =====
+def is_print_banner_open():
+    """รับไฟล์ป้ายพร้อมปริ้นถึงแค่ 6 มีนาคม 14.00 น."""
+    now = datetime.now()
+    deadline = datetime(2026, 3, 6, 14, 0, 0)
+    return now < deadline
+
 # ===== นามสกุลไฟล์แต่ละประเภท =====
 PRINT_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
 DESIGN_EXTENSIONS = ['.ai', '.psd', '.eps', '.svg', '.cdr', '.indd']
 OFFICE_EXTENSIONS = ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']
 
 def analyze_filename(filename):
-    """วิเคราะห์ชื่อไฟล์ว่าน่าจะเป็นงานประเภทไหน"""
+    """วิเคราะห์ชื่อไฟล์ว่าน่าจะเป็นงานประเภทไหน
+    return: (job_type, is_ready_to_print)
+    """
     if not filename:
-        return None
+        return None, False
     fname = filename.lower()
     ext = os.path.splitext(fname)[1]
 
+    # นามสกุลที่พร้อมปริ้นได้เลย (ไม่ต้องออกแบบเพิ่ม)
+    ready_to_print = ext in PRINT_EXTENSIONS or ext == '.pdf'
+    # นามสกุลที่ต้องออกแบบเพิ่ม
+    need_design = ext in DESIGN_EXTENSIONS
+
     # คีย์เวิร์ดในชื่อไฟล์
     if any(k in fname for k in ['banner', 'ป้าย', 'sign', 'flex', 'billboard', 'poster', 'โปสเตอร์']):
-        return "งานป้าย"
+        return "งานป้าย", ready_to_print
     if any(k in fname for k in ['id', 'บัตร', 'card', 'passport', 'หน้าตรง', 'รูปติด']):
-        return "รูปติดบัตร"
+        return "รูปติดบัตร", ready_to_print
     if any(k in fname for k in ['frame', 'กรอบ', 'portrait']):
-        return "รูปพร้อมกรอบรูป"
+        return "รูปพร้อมกรอบรูป", ready_to_print
     if any(k in fname for k in ['cert', 'ใบ', 'diploma', 'award']):
-        return "ปริ้นงาน"
+        return "ปริ้นงาน", ready_to_print
 
     # วิเคราะห์จากนามสกุล
-    if ext in DESIGN_EXTENSIONS:
-        return "แก้ไขไฟล์/ทำป้าย"
+    if need_design:
+        return "แก้ไขไฟล์/ทำป้าย", False
     if ext in PRINT_EXTENSIONS:
-        return "ปริ้นงาน/รูป"
+        return "ปริ้นงาน/รูป", True
     if ext in OFFICE_EXTENSIONS:
-        return "ปริ้นงาน"
+        return "ปริ้นงาน", True
 
-    return None
+    return None, False
 
 # ===== System Prompt ครั้งแรก =====
 SYSTEM_PROMPT_FIRST = """
@@ -82,9 +97,11 @@ SYSTEM_PROMPT_FIRST = """
 ไม่ว่าลูกค้าจะส่งอะไรมา (ข้อความ รูป ไฟล์ สติกเกอร์)
 ให้แจ้งวันหยุดก่อนเสมอ แล้วค่อยตอบหรือถามต่อ
 
-"🌿 แจ้งให้ทราบก่อนนะคะ
+"🌿 สวัสดีค่ะ ขณะนี้น้องออโต้ AI กำลังดูแลแชทอยู่นะคะ
+หากต้องการคุยกับแอดมินโดยตรง แจ้งได้เลยค่ะ 😊
+
 ร้านบ้านเลาคำหยุดพักวันที่ 7-9 มีนาคม 2569 ค่ะ
-เปิดทำการอีกครั้งวันอังคารที่ 10 มีนาคม 2569 นะคะ 😊"
+เปิดทำการอีกครั้งวันอังคารที่ 10 มีนาคม 2569 นะคะ"
 
 == เวลาทำการ ==
 - เปิดทุกวัน 07.30 - 19.00 น. หยุดทุกวันเสาร์
@@ -99,6 +116,11 @@ SYSTEM_PROMPT_FIRST = """
 3. 🪧 ทำป้าย
 4. 📷 รูปติดบัตร
 5. 🖼️ รูปพร้อมกรอบรูป
+
+
+== งานปริ้นป้าย (ไฟล์พร้อมปริ้น) ==
+รับได้ถึงวันพฤหัสที่ 6 มีนาคม 2569 เวลา 14.00 น. เท่านั้น
+หลังจากนั้นปิดรับ เพราะทำไม่ทัน
 
 == แบ่งประเภทงาน ==
 
@@ -175,6 +197,11 @@ SYSTEM_PROMPT_NORMAL = """
 3. 🪧 ทำป้าย
 4. 📷 รูปติดบัตร
 5. 🖼️ รูปพร้อมกรอบรูป
+
+
+== งานปริ้นป้าย (ไฟล์พร้อมปริ้น) ==
+รับได้ถึงวันพฤหัสที่ 6 มีนาคม 2569 เวลา 14.00 น. เท่านั้น
+หลังจากนั้นปิดรับ เพราะทำไม่ทัน
 
 == แบ่งประเภทงาน ==
 
@@ -294,6 +321,9 @@ def save_history(user_id, history):
 
 # ===== ส่งข้อความ =====
 def push_message(user_id, message):
+    # เพิ่ม signature ท้ายข้อความ
+    if not message.endswith("— น้องออโต้ AI 🤖"):
+        message = message + "\n— น้องออโต้ AI 🤖"
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Content-Type": "application/json",
@@ -362,9 +392,18 @@ def process_queue(user_id):
             media_parts.append("[ลูกค้าส่งรูปภาพมา — น่าจะเป็นงานปริ้นรูป ให้ถามยืนยัน]")
         elif msg["type"] == "file":
             fname = msg.get("filename", "")
-            job_type = analyze_filename(fname)
+            job_type, ready_to_print = analyze_filename(fname)
             if job_type:
-                media_parts.append(f"[ลูกค้าส่งไฟล์ชื่อ '{fname}' มา — วิเคราะห์แล้วน่าจะเป็น{job_type} ให้ยืนยันกับลูกค้า]")
+                if "ป้าย" in job_type and ready_to_print:
+                    # ไฟล์ป้ายพร้อมปริ้น → เช็ค deadline
+                    if is_print_banner_open():
+                        media_parts.append(f"[ลูกค้าส่งไฟล์ป้ายพร้อมปริ้นชื่อ '{fname}' มา — รับงานได้ ให้ยืนยันรับงานและแจ้งแอดมินติดต่อกลับ]")
+                    else:
+                        media_parts.append(f"[ลูกค้าส่งไฟล์ป้ายพร้อมปริ้นชื่อ '{fname}' มา — แต่เลยเวลา 14.00 น. ของวันที่ 6 มีนาคมแล้ว ปิดรับงานปริ้นป้ายแล้ว ให้แจ้งลูกค้าว่าไม่สามารถรับได้]")
+                elif "ป้าย" in job_type and not ready_to_print:
+                    media_parts.append(f"[ลูกค้าส่งไฟล์ป้ายที่ต้องออกแบบชื่อ '{fname}' มา — เป็นงานช้า แจ้งว่าเริ่มทำได้ 10 มีนา + [NEED_ADMIN]]")
+                else:
+                    media_parts.append(f"[ลูกค้าส่งไฟล์ชื่อ '{fname}' มา — วิเคราะห์แล้วน่าจะเป็น{job_type} ให้ยืนยันกับลูกค้า]")
             else:
                 media_parts.append(f"[ลูกค้าส่งไฟล์ชื่อ '{fname}' มา — ให้ถามว่าต้องการทำอะไร]")
         elif msg["type"] == "sticker":
@@ -432,7 +471,6 @@ def webhook():
             if msg_type == "text":
                 admin_text = event["message"]["text"]
                 # ดึง chatId เพื่อรู้ว่าแอดมินกำลังคุยกับลูกค้าคนไหน
-                source = event.get("source", {})
                 # กรณี 1-on-1: Line OA จะไม่ส่ง userId ของลูกค้ามาโดยตรงตอนแอดมินตอบ
                 # วิธีที่ดีที่สุดคือบันทึกเฉพาะ queue ที่ active อยู่ล่าสุด 1 รายการ
                 with queue_lock:
