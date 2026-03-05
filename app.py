@@ -19,7 +19,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 genai.configure(api_key=GEMINI_API_KEY)
 
 # ===== ตั้งค่าบอท =====
-AUTO_REOPEN_MINUTES = 15
+AUTO_REOPEN_MINUTES = 60
 BOT_STATUS_FILE = "bot_status.json"
 QUEUE_DELAY_SECONDS = 10
 
