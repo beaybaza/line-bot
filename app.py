@@ -624,6 +624,7 @@ def webhook():
                 ADMIN_STOP_KEYWORDS = [
                     "ส่งแบบค่ะ",
                     "ส่งแบบแก้ไขค่ะ",
+                    "มีแก้ไขจุดไหนเพิ่มเติมอีกไหม",
                 ]
                 if any(kw in admin_text for kw in ADMIN_STOP_KEYWORDS):
                     with queue_lock:
