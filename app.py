@@ -220,7 +220,7 @@ A4: นร. 100 / ผู้ใหญ่ 200 บาท
 มีชื่อไฟล์ → วิเคราะห์แล้วตอบให้เหมาะสม
 
 == เมื่อลูกค้าส่งสติกเกอร์ ==
-ทักทายกลับอบอุ่น ถามว่ามีอะไรให้ช่วยไหม
+ไม่ต้องตอบ ระบบจะไม่ส่งสติ๊กเกอร์มาให้บอทตอบ
 
 == เมื่อแอดมินตอบในแชทไปแล้ว ==
 ห้ามตอบซ้ำในเรื่องนั้น ตอบแค่ส่วนที่ยังค้างอยู่เท่านั้น
@@ -558,7 +558,7 @@ def process_queue(user_id):
             else:
                 media_parts.append(f"[ลูกค้าส่งไฟล์ชื่อ '{fname}' มา — ให้ถามว่าต้องการทำอะไร]")
         elif msg["type"] == "sticker":
-            media_parts.append("[ลูกค้าส่งสติกเกอร์มาทักทาย]")
+            pass  # สติ๊กเกอร์: ข้ามไม่ส่งให้ AI
         elif msg["type"] == "admin_message":
             text_parts.append(f"[แอดมินตอบลูกค้าไปแล้วว่า: {msg['content']} — ห้ามตอบซ้ำในเรื่องนี้]")
 
@@ -690,6 +690,23 @@ def webhook():
         if not is_bot_active(user_id):
             continue
 
+        # ===== คำยืนยัน/ตอบรับของลูกค้า → ปิดบอท 1 ชั่วโมง ไม่ต้องตอบ =====
+        if msg_type == "text":
+            USER_CONFIRM_KEYWORDS = [
+                "โอเคครับ", "โอเคค่ะ", "โอเค", "ok", "OK", "okay",
+                "ได้ครับ", "ได้ค่ะ", "ได้เลย",
+                "พิมพ์เลย", "ปริ้นเลย", "ปริ้นได้เลย", "พิมพ์ได้เลย",
+                "สั่งพิมพ์", "สั่งปริ้น", "สั่งปริ้นได้เลย", "สั่งพิมพ์ได้เลย",
+                "จัดเลย", "จัดได้เลย",
+                "แก้ไขหน่อย", "แก้ไขได้เลย",
+                "รับทราบ", "รับทราบครับ", "รับทราบค่ะ",
+                "เดี๋ยวส่ง", "จะส่งให้",
+            ]
+            user_text = event["message"]["text"].strip()
+            if any(kw in user_text for kw in USER_CONFIRM_KEYWORDS):
+                set_bot_closed(user_id)
+                continue  # ปิดบอท ไม่ตอบ ไม่ใส่ queue
+
         if msg_type == "text":
             add_to_queue(user_id, {
                 "type": "text",
@@ -703,7 +720,7 @@ def webhook():
                 "filename": event["message"].get("fileName", "")
             })
         elif msg_type == "sticker":
-            add_to_queue(user_id, {"type": "sticker"})
+            pass  # สติ๊กเกอร์: ไม่ต้องตอบ ข้ามไปเลย
         else:
             add_to_queue(user_id, {"type": msg_type})
 
