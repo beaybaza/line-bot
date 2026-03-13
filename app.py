@@ -36,6 +36,7 @@ ADMIN_IDS = {
 message_queues = {}
 queue_timers = {}
 queue_lock = threading.Lock()
+latest_reply_tokens = {}  # เก็บ reply_token ล่าสุดต่อ user (ไม่นับโควต้า)
 
 # ===== นามสกุลไฟล์แต่ละประเภท =====
 PRINT_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
@@ -482,14 +483,36 @@ def save_history(user_id, history):
     save_status(all_status)
 
 # ===== ส่งข้อความ =====
-def push_message(user_id, message):
+def send_message(user_id, message, reply_token=None):
+    """ส่งข้อความ — ใช้ reply_token ก่อน (ฟรี ไม่นับโควต้า)
+    ถ้าไม่มี reply_token → fallback เป็น push_message (นับโควต้า)
+    """
     if not message.endswith("— น้องออโต้ AI 🤖"):
         message = message + "\n— น้องออโต้ AI 🤖"
-    url = "https://api.line.me/v2/bot/message/push"
+
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
     }
+
+    if reply_token:
+        # ===== Reply Message: ฟรี ไม่นับโควต้า =====
+        url = "https://api.line.me/v2/bot/message/reply"
+        data = {
+            "replyToken": reply_token,
+            "messages": [{"type": "text", "text": message}]
+        }
+        try:
+            res = requests.post(url, headers=headers, json=data, timeout=10)
+            if res.status_code == 200:
+                return True
+            # token หมดอายุหรือใช้แล้ว → fallback push
+            print(f"[reply ERROR] status={res.status_code} → fallback to push")
+        except Exception as e:
+            print(f"[reply EXCEPTION] {e} → fallback to push")
+
+    # ===== Push Message: fallback (นับโควต้า) =====
+    url = "https://api.line.me/v2/bot/message/push"
     data = {
         "to": user_id,
         "messages": [{"type": "text", "text": message}]
@@ -587,25 +610,32 @@ def process_queue(user_id):
 
     bot_reply = ask_gemini(user_id, combined_message)
 
+    # ดึง reply_token ล่าสุด แล้วลบทิ้ง (ใช้ได้ครั้งเดียว)
+    with queue_lock:
+        reply_token = latest_reply_tokens.pop(user_id, None)
+
     if "[NEED_ADMIN]" in bot_reply:
         clean_reply = bot_reply.replace("[NEED_ADMIN]", "").strip()
-        sent = push_message(user_id, clean_reply)
+        sent = send_message(user_id, clean_reply, reply_token=reply_token)
         if sent and not has_greeted(user_id):
             mark_greeted(user_id)
         set_bot_closed(user_id)
     else:
-        sent = push_message(user_id, bot_reply)
+        sent = send_message(user_id, bot_reply, reply_token=reply_token)
         if sent and not has_greeted(user_id):
             mark_greeted(user_id)
 
 # ===== เพิ่มเข้า Queue =====
-def add_to_queue(user_id, message_data):
+def add_to_queue(user_id, message_data, reply_token=None):
     with queue_lock:
         if user_id in queue_timers:
             queue_timers[user_id].cancel()
         if user_id not in message_queues:
             message_queues[user_id] = []
         message_queues[user_id].append(message_data)
+        # เก็บ reply_token ล่าสุดเสมอ (token ของข้อความล่าสุดยังไม่หมดอายุ)
+        if reply_token:
+            latest_reply_tokens[user_id] = reply_token
         timer = threading.Timer(QUEUE_DELAY_SECONDS, process_queue, args=[user_id])
         queue_timers[user_id] = timer
         timer.start()
@@ -715,22 +745,24 @@ def webhook():
                 set_bot_closed(user_id)
                 continue  # ปิดบอท ไม่ตอบ ไม่ใส่ queue
 
+        reply_token = event.get("replyToken", "")
+
         if msg_type == "text":
             add_to_queue(user_id, {
                 "type": "text",
                 "content": event["message"]["text"]
-            })
+            }, reply_token=reply_token)
         elif msg_type == "image":
-            add_to_queue(user_id, {"type": "image"})
+            add_to_queue(user_id, {"type": "image"}, reply_token=reply_token)
         elif msg_type == "file":
             add_to_queue(user_id, {
                 "type": "file",
                 "filename": event["message"].get("fileName", "")
-            })
+            }, reply_token=reply_token)
         elif msg_type == "sticker":
             pass  # สติ๊กเกอร์: ไม่ต้องตอบ ข้ามไปเลย
         else:
-            add_to_queue(user_id, {"type": msg_type})
+            add_to_queue(user_id, {"type": msg_type}, reply_token=reply_token)
 
     return "OK", 200
 
