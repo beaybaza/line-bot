@@ -5,6 +5,9 @@ import hmac
 import base64
 import threading
 from datetime import datetime, timedelta
+
+# file lock สำหรับป้องกัน race condition ตอนอ่าน/เขียน bot_status.json
+status_file_lock = threading.Lock()
 from flask import Flask, request, abort
 import google.generativeai as genai
 import requests
@@ -411,14 +414,16 @@ A4: นร. 100 / ผู้ใหญ่ 200 บาท
 
 # ===== จัดการสถานะบอท =====
 def load_status():
-    if not os.path.exists(BOT_STATUS_FILE):
-        return {}
-    with open(BOT_STATUS_FILE, "r") as f:
-        return json.load(f)
+    with status_file_lock:
+        if not os.path.exists(BOT_STATUS_FILE):
+            return {}
+        with open(BOT_STATUS_FILE, "r") as f:
+            return json.load(f)
 
 def save_status(data):
-    with open(BOT_STATUS_FILE, "w") as f:
-        json.dump(data, f)
+    with status_file_lock:
+        with open(BOT_STATUS_FILE, "w") as f:
+            json.dump(data, f)
 
 def get_user_data(user_id):
     return load_status().get(user_id, {})
@@ -450,6 +455,7 @@ def set_bot_open(user_id):
         all_status[user_id] = {}
     all_status[user_id]["status"] = "open"
     all_status[user_id].pop("closed_at", None)
+    all_status[user_id]["greeted"] = False  # reset ทักทายใหม่ทุกครั้งที่เปิดบอท
     all_status[user_id].setdefault("history", [])
     save_status(all_status)
 
@@ -488,7 +494,14 @@ def push_message(user_id, message):
         "to": user_id,
         "messages": [{"type": "text", "text": message}]
     }
-    requests.post(url, headers=headers, json=data)
+    try:
+        res = requests.post(url, headers=headers, json=data, timeout=10)
+        if res.status_code != 200:
+            print(f"[push_message ERROR] status={res.status_code} body={res.text}")
+        return res.status_code == 200
+    except Exception as e:
+        print(f"[push_message EXCEPTION] {e}")
+        return False
 
 # ===== ตรวจสอบ Signature =====
 def verify_signature(body, signature):
@@ -574,15 +587,16 @@ def process_queue(user_id):
 
     bot_reply = ask_gemini(user_id, combined_message)
 
-    if not has_greeted(user_id):
-        mark_greeted(user_id)
-
     if "[NEED_ADMIN]" in bot_reply:
         clean_reply = bot_reply.replace("[NEED_ADMIN]", "").strip()
-        push_message(user_id, clean_reply)
+        sent = push_message(user_id, clean_reply)
+        if sent and not has_greeted(user_id):
+            mark_greeted(user_id)
         set_bot_closed(user_id)
     else:
-        push_message(user_id, bot_reply)
+        sent = push_message(user_id, bot_reply)
+        if sent and not has_greeted(user_id):
+            mark_greeted(user_id)
 
 # ===== เพิ่มเข้า Queue =====
 def add_to_queue(user_id, message_data):
@@ -632,11 +646,7 @@ def webhook():
                         active_users = list(message_queues.keys())
                     if len(active_users) == 1:
                         set_bot_closed(active_users[0])
-                    elif len(active_users) == 0:
-                        all_status = load_status()
-                        non_admin = [uid for uid in all_status if uid not in ADMIN_IDS]
-                        if non_admin:
-                            set_bot_closed(non_admin[0])
+                    # ถ้าไม่มีใครใน queue → ไม่ทำอะไร (แอดมินส่งแบบให้ช่องอื่น)
                     continue
 
                 # ===== คำที่แอดมินพิมพ์ → บอทอ่านแล้วคำนวณราคาต่อได้เลย =====
@@ -659,8 +669,7 @@ def webhook():
                     "แคนวาส", "กรอบลอย",
                     # เข้าเล่ม
                     " มิล", "มิลลิเมตร",
-                    # รูปแบบตัวเลขคูณ
-                    "x",
+                    # รูปแบบตัวเลขคูณ (ใช้ regex แทน เพราะ "x" เดี่ยวๆ match กว้างเกิน)
                 ]
                 is_size_message = any(kw in admin_text for kw in ADMIN_SIZE_KEYWORDS)
 
@@ -674,13 +683,11 @@ def webhook():
                                 "type": "admin_message",
                                 "content": admin_text
                             })
-                    # ถ้าแอดมินส่งข้อมูลขนาด/วัสดุ → เปิดบอทให้คำนวณราคาต่อ
-                    if is_size_message:
-                        # เปิดบอทชั่วคราวให้ตอบได้ (ไม่ปิดบอท)
-                        pass  # บอทยังทำงานอยู่ ไม่ต้อง set_bot_closed
-                    else:
-                        # ข้อความแอดมินปกติ → ปิดบอท ให้แอดมินคุยเอง
+                    # แอดมินส่งข้อมูลขนาด/วัสดุ → ไม่ปิดบอท (บอทอ่านต่อได้)
+                    # แอดมินส่งข้อความปกติ → ปิดบอท ให้แอดมินคุยเอง
+                    if not is_size_message:
                         set_bot_closed(uid)
+                # ถ้าไม่มีลูกค้าใน queue → ไม่ทำอะไร (แอดมินแค่คุยกันเอง)
                 # ถ้ามีลูกค้า active มากกว่า 1 คน → ไม่ใส่เพราะไม่รู้ว่าแอดมินตอบใคร
             continue  # ไม่ให้บอทตอบข้อความแอดมิน
 
@@ -703,7 +710,8 @@ def webhook():
                 "เดี๋ยวส่ง", "จะส่งให้",
             ]
             user_text = event["message"]["text"].strip()
-            if any(kw in user_text for kw in USER_CONFIRM_KEYWORDS):
+            # เช็คแบบ exact match (ทั้งข้อความ) เพื่อไม่ให้ match คำอื่นโดยบังเอิญ
+            if user_text in USER_CONFIRM_KEYWORDS:
                 set_bot_closed(user_id)
                 continue  # ปิดบอท ไม่ตอบ ไม่ใส่ queue
 
